@@ -1,0 +1,117 @@
+import 'package:flutter/material.dart';
+import 'package:mqtt_client/mqtt_client.dart';
+import 'package:mqtt_client/mqtt_server_client.dart';
+
+void main() {
+  runApp(SmartLightApp());
+}
+
+class SmartLightApp extends StatefulWidget {
+  @override
+  _SmartLightAppState createState() => _SmartLightAppState();
+}
+
+class _SmartLightAppState extends State<SmartLightApp> {
+  final client = MqttServerClient('test.mosquitto.org', 'SmartLightApp');
+  String ledStatus = "OFF";
+  String mode = "AUTO";
+  String sensorData = "";
+
+  @override
+  void initState() {
+    super.initState();
+    setupMqtt();
+  }
+
+  Future<void> setupMqtt() async {
+    client.port = 1883;
+    client.keepAlivePeriod = 20;
+    client.logging(on: false);
+
+    final connMess = MqttConnectMessage()
+        .withClientIdentifier('SmartLightApp')
+        .startClean();
+
+    client.connectionMessage = connMess;
+
+    try {
+      await client.connect();
+    } catch (e) {
+      client.disconnect();
+    }
+
+    client.subscribe("casa/sufragerie/status", MqttQos.atLeastOnce);
+    client.subscribe("casa/sufragerie/sensors", MqttQos.atLeastOnce);
+
+    client.updates!.listen((List<MqttReceivedMessage<MqttMessage>> c) {
+      final recMess = c[0].payload as MqttPublishMessage;
+      final message =
+          MqttPublishPayload.bytesToStringAsString(recMess.payload.message);
+
+      if (c[0].topic == "casa/sufragerie/status") {
+        setState(() {
+          final parts = message.split(";");
+          mode = parts[0].split("=")[1];
+          ledStatus = parts[1].split("=")[1];
+        });
+      }
+
+      if (c[0].topic == "casa/sufragerie/sensors") {
+        setState(() {
+          sensorData = message;
+        });
+      }
+    });
+  }
+
+  void sendCommand(String topic, String message) {
+    final builder = MqttClientPayloadBuilder();
+    builder.addString(message);
+    client.publishMessage(topic, MqttQos.atLeastOnce, builder.payload!);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      home: Scaffold(
+        appBar: AppBar(title: Text("Smart Light Controller")),
+        body: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            children: [
+              Text("Mod curent: $mode", style: TextStyle(fontSize: 20)),
+              Text("LED: $ledStatus", style: TextStyle(fontSize: 20)),
+              SizedBox(height: 20),
+              Text("Senzori: $sensorData", style: TextStyle(fontSize: 16)),
+              SizedBox(height: 30),
+
+              ElevatedButton(
+                onPressed: () => sendCommand("casa/sufragerie/mode", "AUTO"),
+                child: Text("Mod AUTO"),
+              ),
+              ElevatedButton(
+                onPressed: () => sendCommand("casa/sufragerie/mode", "ON"),
+                child: Text("Mod ON"),
+              ),
+              ElevatedButton(
+                onPressed: () => sendCommand("casa/sufragerie/mode", "OFF"),
+                child: Text("Mod OFF"),
+              ),
+
+              SizedBox(height: 20),
+
+              ElevatedButton(
+                onPressed: () => sendCommand("casa/sufragerie/lumina", "ON"),
+                child: Text("Aprinde LED"),
+              ),
+              ElevatedButton(
+                onPressed: () => sendCommand("casa/sufragerie/lumina", "OFF"),
+                child: Text("Stinge LED"),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
