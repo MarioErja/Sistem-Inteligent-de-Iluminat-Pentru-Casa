@@ -1,0 +1,46 @@
+CREATE DATABASE smartlight;
+USE smartlight;
+
+CREATE TABLE users (
+  user_id INT AUTO_INCREMENT PRIMARY KEY,
+  username VARCHAR(50),
+  password_hash VARCHAR(255),
+  email VARCHAR(100),
+  role ENUM('admin','user','tester')
+);
+
+CREATE TABLE devices (
+  device_id INT AUTO_INCREMENT PRIMARY KEY,
+  device_name VARCHAR(50),
+  location VARCHAR(50),
+  status BOOLEAN,
+  last_update TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE sensors (
+  sensor_id INT AUTO_INCREMENT PRIMARY KEY,
+  device_id INT,
+  type ENUM('lumina','miscare'),
+  value FLOAT,
+  timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (device_id) REFERENCES devices(device_id)
+);
+
+CREATE TABLE commands (
+  command_id INT AUTO_INCREMENT PRIMARY KEY,
+  device_id INT,
+  user_id INT,
+  command VARCHAR(50),
+  timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (device_id) REFERENCES devices(device_id),
+  FOREIGN KEY (user_id) REFERENCES users(user_id)
+);
+
+CREATE TABLE logs (
+  log_id INT AUTO_INCREMENT PRIMARY KEY,
+  device_id INT,
+  event_type VARCHAR(50),
+  details TEXT,
+  timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (device_id) REFERENCES devices(device_id)
+);
