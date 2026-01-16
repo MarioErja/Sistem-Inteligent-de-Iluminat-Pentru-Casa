@@ -1,0 +1,198 @@
+#include <WiFi.h>
+#include <PubSubClient.h>
+
+// CONFIGURARE WI-FI
+const char* ssid = "Wokwi-GUEST";    // in Wokwi, SSID default
+const char* password = "";           // gol pentru Wokwi
+
+// CONFIGURARE MQTT
+const char* mqtt_server = "test.mosquitto.org";
+const int   mqtt_port   = 1883;
+
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+// PINI HARDWARE
+const int LDR_PIN   = 34;  // ADC
+const int PIR_PIN   = 27;  // digital
+const int LED_PIN   = 26;  // digital output
+
+// LOGICA SISTEM
+enum Mode { MODE_AUTO, MODE_ON, MODE_OFF };
+Mode currentMode = MODE_AUTO;
+
+unsigned long lastMotionTime = 0;
+const unsigned long MOTION_TIMEOUT = 30 * 1000;
+
+// prag lumina (AJUSTABIL DUPA SIMULARE)
+int LIGHT_THRESHOLD = 2000; // ADC: 0 - 4095
+
+// TOPICURI MQTT
+const char* topic_cmd_mode   = "casa/sufragerie/mode";   // ON/OFF/AUTO
+const char* topic_cmd_light  = "casa/sufragerie/lumina"; // optional ON/OFF
+const char* topic_status     = "casa/sufragerie/status"; // trimite stare
+const char* topic_sensors    = "casa/sufragerie/sensors"; // valori senzori
+
+// PROTOTIPURI
+void setup_wifi();
+void reconnect();
+void callback(char* topic, byte* payload, unsigned int length);
+void publishStatus();
+void publishSensors();
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(PIR_PIN, INPUT);
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+
+  setup_wifi();
+  client.setServer(mqtt_server, mqtt_port);
+  client.setCallback(callback);
+}
+
+void loop() {
+  if (!client.connected()) {
+    reconnect();
+  }
+  client.loop();
+
+  // citire senzori
+  int ldrValue = analogRead(LDR_PIN);
+  int pirValue = digitalRead(PIR_PIN);
+
+  // daca detecteaza miscare, retinem momentul
+  if (pirValue == HIGH) {
+    lastMotionTime = millis();
+  }
+
+  bool shouldLightOn = false;
+
+  if (currentMode == MODE_ON) {
+    shouldLightOn = true;
+  } else if (currentMode == MODE_OFF) {
+    shouldLightOn = false;
+  } else { // MODE_AUTO
+    bool isDark = (ldrValue < LIGHT_THRESHOLD); // sau >, depinde de cum iese in simulare
+    bool motionRecently = (millis() - lastMotionTime) < MOTION_TIMEOUT;
+
+    if (isDark && motionRecently) {
+      shouldLightOn = true;
+    } else {
+      shouldLightOn = false;
+    }
+  }
+
+  digitalWrite(LED_PIN, shouldLightOn ? HIGH : LOW);
+
+  // trimitem din cand in cand datele la broker (ex. la fiecare 5 secunde)
+  static unsigned long lastPublish = 0;
+  if (millis() - lastPublish > 5000) {
+    publishSensors();
+    publishStatus();
+    lastPublish = millis();
+  }
+
+  delay(100);
+}
+
+// FUNCTII WI-FI
+void setup_wifi() {
+  delay(10);
+  Serial.println();
+  Serial.print("Conectare la ");
+  Serial.println(ssid);
+
+  WiFi.begin(ssid, password);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("");
+  Serial.println("WiFi conectat");
+  Serial.print("IP: ");
+  Serial.println(WiFi.localIP());
+}
+
+// FUNCTII MQTT
+void reconnect() {
+  // pana se conecteaza
+  while (!client.connected()) {
+    Serial.print("Conectare la MQTT...");
+    String clientId = "ESP32-SmartLight-";
+    clientId += String(random(0xffff), HEX);
+
+    if (client.connect(clientId.c_str())) {
+      Serial.println("conectat");
+
+      // abonare la topicuri
+      client.subscribe(topic_cmd_mode);
+      client.subscribe(topic_cmd_light);
+
+      // anuntam starea initiala
+      publishStatus();
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" incearca din nou in 5 sec");
+      delay(5000);
+    }
+  }
+}
+
+void callback(char* topic, byte* payload, unsigned int length) {
+  String msg;
+  for (unsigned int i = 0; i < length; i++) {
+    msg += (char)payload[i];
+  }
+  msg.trim();
+
+  Serial.print("Mesaj primit pe topicul: ");
+  Serial.print(topic);
+  Serial.print(" => ");
+  Serial.println(msg);
+
+  if (String(topic) == topic_cmd_mode) {
+    if (msg.equalsIgnoreCase("AUTO")) {
+      currentMode = MODE_AUTO;
+    } else if (msg.equalsIgnoreCase("ON")) {
+      currentMode = MODE_ON;
+    } else if (msg.equalsIgnoreCase("OFF")) {
+      currentMode = MODE_OFF;
+    }
+  }
+
+  if (String(topic) == topic_cmd_light) {
+    // optional: control direct ON/OFF indiferent de mod
+    if (msg.equalsIgnoreCase("ON")) {
+      digitalWrite(LED_PIN, HIGH);
+    } else if (msg.equalsIgnoreCase("OFF")) {
+      digitalWrite(LED_PIN, LOW);
+    }
+  }
+
+  publishStatus();
+}
+
+void publishStatus() {
+  String statusMsg = "mode=";
+  if (currentMode == MODE_AUTO) statusMsg += "AUTO";
+  else if (currentMode == MODE_ON) statusMsg += "ON";
+  else statusMsg += "OFF";
+
+  statusMsg += ";led=";
+  statusMsg += digitalRead(LED_PIN) == HIGH ? "ON" : "OFF";
+
+  client.publish(topic_status, statusMsg.c_str());
+}
+
+void publishSensors() {
+  int ldrValue = analogRead(LDR_PIN);
+  int pirValue = digitalRead(PIR_PIN);
+
+  String s = "ldr=" + String(ldrValue) + ";pir=" + String(pirValue);
+  client.publish(topic_sensors, s.c_str());
+}
